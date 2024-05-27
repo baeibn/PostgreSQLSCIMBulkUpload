@@ -1,0 +1,424 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_PostgreSqlSCIMBulkUpload_name": {
+            "defaultValue": "PostgreSqlSCIMBulkUpload",
+            "type": "String"
+        },
+        "connections_postgresql_externalid": {
+            "defaultValue": "/subscriptions/0c4c9f37-877e-4e89-b1f7-2a38e155332e/resourceGroups/DemoMaschines/providers/Microsoft.Web/connections/postgresql",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_PostgreSqlSCIMBulkUpload_name')]",
+            "location": "northeurope",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "SCIM API uri": {
+                            "defaultValue": "https://graph.microsoft.com/v1.0/servicePrincipals/7d8c5779-d1cb-4e71-85d3-070c073480c4/synchronization/jobs/API2AAD.9d82b8f1037d41fc9d3481de7acbbef8.7bdd363c-4fa0-4ed7-a625-39c92e4185a0/bulkUpload",
+                            "type": "String"
+                        },
+                        "PostgreSql View name": {
+                            "defaultValue": "public.empview",
+                            "type": "String"
+                        },
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "staticResults": {
+                        "Get_rows0": {
+                            "status": "Succeeded"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Day",
+                                "interval": 5
+                            },
+                            "evaluatedRecurrence": {
+                                "frequency": "Day",
+                                "interval": 5
+                            },
+                            "type": "Recurrence"
+                        }
+                    },
+                    "actions": {
+                        "For_each": {
+                            "foreach": "@body('Get_rows')?['value']",
+                            "actions": {
+                                "Check_if_we_are_at_max_bulk_size_(50_records)": {
+                                    "actions": {
+                                        "Append_last_SCIMUser_record_in_the_chunk": {
+                                            "type": "AppendToStringVariable",
+                                            "inputs": {
+                                                "name": "SCIMBulkPayload",
+                                                "value": "@outputs('Construct_SCIMUser')"
+                                            }
+                                        },
+                                        "Finalize_SCIMBulkPayload": {
+                                            "runAfter": {
+                                                "Append_last_SCIMUser_record_in_the_chunk": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "AppendToStringVariable",
+                                            "inputs": {
+                                                "name": "SCIMBulkPayload",
+                                                "value": "  ],\n  \"failOnErrors\": null\n}"
+                                            }
+                                        },
+                                        "Prepare_next_chunk_of_SCIMBulkPayload": {
+                                            "runAfter": {
+                                                "Reset_Iteration_Count": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "SetVariable",
+                                            "inputs": {
+                                                "name": "SCIMBulkPayload",
+                                                "value": "{\n  \"schemas\": [\n    \"urn:ietf:params:scim:api:messages:2.0:BulkRequest\"\n  ],\n  \"Operations\": ["
+                                            }
+                                        },
+                                        "Reset_Iteration_Count": {
+                                            "runAfter": {
+                                                "Send_SCIMBulkPayload_to_API_endpoint": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "SetVariable",
+                                            "inputs": {
+                                                "name": "IterationCount",
+                                                "value": 0
+                                            }
+                                        },
+                                        "Send_SCIMBulkPayload_to_API_endpoint": {
+                                            "runAfter": {
+                                                "View_SCIMBulkPayload": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Http",
+                                            "inputs": {
+                                                "uri": "@parameters('SCIM API uri')",
+                                                "method": "POST",
+                                                "headers": {
+                                                    "Content-Type": "application/scim+json"
+                                                },
+                                                "body": "@variables('SCIMBulkPayload')",
+                                                "authentication": {
+                                                    "type": "ManagedServiceIdentity",
+                                                    "audience": "https://graph.microsoft.com"
+                                                }
+                                            },
+                                            "operationOptions": "DisableAsyncPattern"
+                                        },
+                                        "View_SCIMBulkPayload": {
+                                            "runAfter": {
+                                                "Finalize_SCIMBulkPayload": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Compose",
+                                            "inputs": "@variables('SCIMBulkPayload')"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Construct_SCIMUser": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {
+                                            "Append_SCIMUser_record": {
+                                                "type": "AppendToStringVariable",
+                                                "inputs": {
+                                                    "name": "SCIMBulkPayload",
+                                                    "value": "@concat(outputs('Construct_SCIMUser'),',')"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "or": [
+                                            {
+                                                "equals": [
+                                                    "@variables('IterationCount')",
+                                                    50
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Construct_SCIMUser": {
+                                    "runAfter": {
+                                        "Increment_IterationCount": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": {
+                                        "bulkId": "@{guid()}",
+                                        "data": {
+                                            "active": "@if(equals(items('For_each')?['WorkerStatus'],'Active'),true,false)",
+                                            "addresses": [
+                                                {
+                                                    "country": "@{item()?['country_name']}",
+                                                    "locality": "",
+                                                    "postalCode": "",
+                                                    "streetAddress": "",
+                                                    "type": "work"
+                                                }
+                                            ],
+                                            "displayName": "@{item()?['first_name']} @{item()?['middle_name']} @{item()?['last_name']}",
+                                            "externalId": "@{item()?['employee_grid']}",
+                                            "name": {
+                                                "familyName": "@{item()?['last_name']}",
+                                                "givenName": "@{item()?['first_name']}"
+                                            },
+                                            "title": "@{item()?['position_title']}",
+                                            "nickName": "",
+                                            "phoneNumbers": [
+                                                {
+                                                    "type": "mobile",
+                                                    "value": "@{item()?['work_mobile']}"
+                                                }
+                                            ],
+                                            "emails": [
+                                                {
+                                                    "type": "work",
+                                                    "value": "@{item()?['work_email']}"
+                                                }
+                                            ],
+                                            "schemas": [
+                                                "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+                                                "urn:microsoft:csv2scim"
+                                            ],
+                                            "urn:microsoft:csv2scim": {
+                                                "terminationdate": "@{item()?['last_day_of_work']}",
+                                                "hiredate": "@{item()?['first_day_of_work']}"
+                                            },
+                                            "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+                                                "organization": "@{item()?['company_name']}",
+                                                "costCenter": "@{item()?['cost_center_name']}",
+                                                "department": "",
+                                                "division": "@{item()?['service_area_name']}",
+                                                "employeeNumber": "@{item()?['employee_grid']}",
+                                                "manager": {
+                                                    "value": "@{item()?['manager_grid']}"
+                                                }
+                                            }
+                                        },
+                                        "method": "POST",
+                                        "path": "/Users"
+                                    }
+                                },
+                                "Increment_IterationCount": {
+                                    "type": "IncrementVariable",
+                                    "inputs": {
+                                        "name": "IterationCount",
+                                        "value": 1
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_InvocationDateTime": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach",
+                            "runtimeConfiguration": {
+                                "concurrency": {
+                                    "repetitions": 1
+                                }
+                            }
+                        },
+                        "Initialize_InvocationDateTime": {
+                            "runAfter": {
+                                "Initialize_SCIMBulkPayload": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "InvocationDateTime",
+                                        "type": "string",
+                                        "value": "@{utcNow()}"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_IterationCount": {
+                            "runAfter": {
+                                "Get_rows": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "IterationCount",
+                                        "type": "integer",
+                                        "value": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_SCIMBulkPayload": {
+                            "runAfter": {
+                                "Initialize_IterationCount": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "SCIMBulkPayload",
+                                        "type": "string",
+                                        "value": "{\n  \"schemas\": [\n    \"urn:ietf:params:scim:api:messages:2.0:BulkRequest\"\n  ],\n  \"Operations\": [\n"
+                                    }
+                                ]
+                            }
+                        },
+                        "Get_rows": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['postgresql']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/datasets/default/tables/@{encodeURIComponent(encodeURIComponent(parameters('PostgreSql View name')))}/items"
+                            },
+                            "runtimeConfiguration": {
+                                "staticResult": {
+                                    "staticResultOptions": "Disabled",
+                                    "name": "Get_rows0"
+                                }
+                            }
+                        },
+                        "Check_if_bulk_has_unsend_records": {
+                            "actions": {
+                                "Finalize_SCIMBulkPayload_on_last_record": {
+                                    "runAfter": {
+                                        "Set_variable": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "SCIMBulkPayload",
+                                        "value": " ],\n  \"failOnErrors\": null\n}"
+                                    }
+                                },
+                                "View_SCIMBulkPayload_on_last_record": {
+                                    "runAfter": {
+                                        "Finalize_SCIMBulkPayload_on_last_record": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@variables('SCIMBulkPayload')"
+                                },
+                                "Send_SCIMBulkPayload_to_API_endpoint_on_last_record": {
+                                    "runAfter": {
+                                        "View_SCIMBulkPayload_on_last_record": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "@parameters('SCIM API uri')",
+                                        "method": "POST",
+                                        "headers": {
+                                            "Content-Type": "application/scim+json"
+                                        },
+                                        "body": "@variables('SCIMBulkPayload')",
+                                        "authentication": {
+                                            "type": "ManagedServiceIdentity",
+                                            "audience": "https://graph.microsoft.com"
+                                        }
+                                    },
+                                    "runtimeConfiguration": {
+                                        "contentTransfer": {
+                                            "transferMode": "Chunked"
+                                        }
+                                    }
+                                },
+                                "Remove_last_comma": {
+                                    "type": "Compose",
+                                    "inputs": "@substring(variables('SCIMBulkPayload'),0,sub(length(variables('SCIMBulkPayload')),1))"
+                                },
+                                "Set_variable": {
+                                    "runAfter": {
+                                        "Remove_last_comma": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "SCIMBulkPayload",
+                                        "value": "@{outputs('Remove_last_comma')}"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "For_each": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@variables('IterationCount')",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "postgresql": {
+                                "id": "/subscriptions/0c4c9f37-877e-4e89-b1f7-2a38e155332e/providers/Microsoft.Web/locations/northeurope/managedApis/postgresql",
+                                "connectionId": "[parameters('connections_postgresql_externalid')]",
+                                "connectionName": "postgresql"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
